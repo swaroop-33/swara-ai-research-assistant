@@ -28,6 +28,9 @@ from app.api.routes import health, upload, query
 
 logger = get_logger(__name__)
 
+import os
+
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

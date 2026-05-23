@@ -1,22 +1,30 @@
 """
 app/services/retrieval_service.py
 ===================================
-Semantic retrieval service — orchestrates query embedding + vector search.
+Semantic retrieval service for SWARA.
 """
 
+import re
 import time
+
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import List, Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
+
 from app.schemas.response import RetrievedChunk
+
 from embeddings.embedder import (
     EmbeddingEngine,
     get_embedding_engine,
 )
-from vectorstore.chroma_store import VectorStore
+
+from vectorstore.chroma_store import (
+    VectorStore,
+    get_vector_store,
+)
 
 logger = get_logger(__name__)
 
@@ -24,25 +32,40 @@ logger = get_logger(__name__)
 # RETRIEVAL CONFIG
 # =========================================================
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.22
+DEFAULT_SIMILARITY_THRESHOLD = 0.18
 
-HIGH_PRECISION_THRESHOLD = 0.30
+HIGH_PRECISION_THRESHOLD = 0.24
 
 MAX_INTERNAL_RETRIEVAL = 12
 
+
 # =========================================================
-# RESULT STRUCTURE
+# RETRIEVAL RESULT
 # =========================================================
 
 @dataclass
 class RetrievalResult:
 
-    query: str
+    original_query: str
+
+    expanded_query: str
+
     chunks: List[RetrievedChunk]
+
     retrieval_time_ms: float
+
     embedding_time_ms: float
+
     search_time_ms: float
+
     total_chunks_in_store: int
+
+    filtered_chunk_count: int
+
+    similarity_threshold: float
+
+    factual_query_detected: bool
+
     is_empty: bool
 
 
@@ -59,6 +82,7 @@ class RetrievalService:
     ):
 
         self._embedding_engine = embedding_engine
+
         self._vector_store = vector_store
 
         logger.info(
@@ -73,14 +97,21 @@ class RetrievalService:
         self,
         query: str,
         n_results: Optional[int] = None,
+        chat_history: Optional[list] = None,
     ) -> RetrievalResult:
 
-        query = query.strip()
+        original_query = query.strip()
 
-        if not query:
+        if not original_query:
+
             raise ValueError(
                 "Query cannot be empty."
             )
+
+        expanded_query = self._expand_query(
+            query=original_query,
+            chat_history=chat_history,
+        )
 
         k = n_results or settings.top_k_results
 
@@ -88,13 +119,13 @@ class RetrievalService:
 
         logger.info(
             f"Retrieval started | "
-            f"query_len={len(query)} | "
+            f"query='{expanded_query[:120]}' | "
             f"k={k}",
             extra={"ai_pipeline": True},
         )
 
         # =================================================
-        # STEP 1 — STORE VALIDATION
+        # STORE VALIDATION
         # =================================================
 
         stats = self._vector_store.get_stats()
@@ -107,24 +138,28 @@ class RetrievalService:
             )
 
             return RetrievalResult(
-                query=query,
+                original_query=original_query,
+                expanded_query=expanded_query,
                 chunks=[],
                 retrieval_time_ms=0.0,
                 embedding_time_ms=0.0,
                 search_time_ms=0.0,
                 total_chunks_in_store=0,
+                filtered_chunk_count=0,
+                similarity_threshold=0.0,
+                factual_query_detected=False,
                 is_empty=True,
             )
 
         # =================================================
-        # STEP 2 — QUERY EMBEDDING
+        # QUERY EMBEDDING
         # =================================================
 
         embed_start = time.perf_counter()
 
         query_vector = (
             self._embedding_engine.encode_query(
-                query
+                expanded_query
             )
         )
 
@@ -133,7 +168,7 @@ class RetrievalService:
         ) * 1000
 
         # =================================================
-        # STEP 3 — VECTOR SEARCH
+        # VECTOR SEARCH
         # =================================================
 
         search_start = time.perf_counter()
@@ -149,10 +184,10 @@ class RetrievalService:
         )
 
         # =================================================
-        # STEP 4 — DYNAMIC THRESHOLDING
+        # FACTUAL DETECTION
         # =================================================
 
-        query_lower = query.lower()
+        query_lower = expanded_query.lower()
 
         factual_keywords = [
             "what",
@@ -175,6 +210,10 @@ class RetrievalService:
             else DEFAULT_SIMILARITY_THRESHOLD
         )
 
+        # =================================================
+        # DYNAMIC FILTERING
+        # =================================================
+
         filtered_chunks = [
             chunk
             for chunk in chunks
@@ -187,18 +226,8 @@ class RetrievalService:
             - len(filtered_chunks)
         )
 
-        if removed_chunks > 0:
-
-            logger.info(
-                f"Low-confidence chunks filtered | "
-                f"removed={removed_chunks} | "
-                f"remaining={len(filtered_chunks)} | "
-                f"threshold={similarity_threshold}",
-                extra={"ai_pipeline": True},
-            )
-
         # =================================================
-        # STEP 5 — FINAL RANKING
+        # SMART RANKING
         # =================================================
 
         filtered_chunks = sorted(
@@ -206,6 +235,7 @@ class RetrievalService:
             key=lambda x: (
                 x.similarity_score,
                 len(x.text),
+                -x.rank,
             ),
             reverse=True,
         )
@@ -223,45 +253,141 @@ class RetrievalService:
         logger.info(
             f"Retrieval complete | "
             f"chunks={len(chunks)} | "
+            f"threshold={similarity_threshold:.2f} | "
             f"embed={embedding_time_ms:.1f}ms | "
-            f"search={search_time_ms:.1f}ms | "
-            f"total={total_time_ms:.1f}ms | "
-            f"top_score={chunks[0].similarity_score if chunks else 'N/A'}",
+            f"search={search_time_ms:.1f}ms",
             extra={"ai_pipeline": True},
         )
 
-        if not chunks:
-
-            logger.warning(
-                "No sufficiently relevant chunks retrieved."
-            )
-
         return RetrievalResult(
-            query=query,
+            original_query=original_query,
+            expanded_query=expanded_query,
             chunks=chunks,
             retrieval_time_ms=total_time_ms,
             embedding_time_ms=embedding_time_ms,
             search_time_ms=search_time_ms,
             total_chunks_in_store=stats.total_chunks,
+            filtered_chunk_count=removed_chunks,
+            similarity_threshold=similarity_threshold,
+            factual_query_detected=is_factual_query,
             is_empty=len(chunks) == 0,
         )
 
     # =====================================================
-    # VECTOR STORE STATS
+    # QUERY EXPANSION
+    # =====================================================
+
+    def _expand_query(
+        self,
+        query: str,
+        chat_history: Optional[list] = None,
+    ) -> str:
+
+        if not chat_history:
+
+            return query
+
+        query_lower = query.lower()
+
+        ambiguous_terms = [
+            "he",
+            "she",
+            "him",
+            "her",
+            "they",
+            "them",
+            "that",
+            "this",
+        ]
+
+        contains_reference = any(
+            re.search(
+                rf"\b{term}\b",
+                query_lower,
+            )
+            for term in ambiguous_terms
+        )
+
+        if not contains_reference:
+
+            return query
+
+        recent_messages = chat_history[-6:]
+
+        entity_pattern = r"\b[A-Z][a-zA-Z]{2,}\b"
+
+        detected_entities = []
+
+        for msg in reversed(recent_messages):
+
+            # =============================================
+            # SUPPORT DICTS + PYDANTIC OBJECTS
+            # =============================================
+
+            if isinstance(msg, dict):
+
+                content = msg.get(
+                    "content",
+                    "",
+                )
+
+            else:
+
+                content = getattr(
+                    msg,
+                    "content",
+                    "",
+                )
+
+            matches = re.findall(
+                entity_pattern,
+                content,
+            )
+
+            for match in matches:
+
+                if (
+                    match
+                    not in detected_entities
+                ):
+
+                    detected_entities.append(
+                        match
+                    )
+
+        if not detected_entities:
+
+            return query
+
+        primary_entity = (
+            detected_entities[0]
+        )
+
+        expanded_query = (
+            f"{query} "
+            f"(Referring to {primary_entity})"
+        )
+
+        logger.info(
+            f"Query expanded | "
+            f"expanded='{expanded_query}'",
+            extra={"ai_pipeline": True},
+        )
+
+        return expanded_query
+
+    # =====================================================
+    # VECTOR STORE OPS
     # =====================================================
 
     def get_store_stats(self):
 
         return self._vector_store.get_stats()
 
-    # =====================================================
-    # CLEAR VECTOR STORE
-    # =====================================================
-
     def clear_store(self) -> None:
 
         logger.info(
-            "Clearing vector store via RetrievalService"
+            "Clearing vector store..."
         )
 
         self._vector_store.clear_collection()
@@ -280,5 +406,5 @@ def get_retrieval_service() -> RetrievalService:
 
     return RetrievalService(
         embedding_engine=get_embedding_engine(),
-        vector_store=VectorStore(),
+        vector_store=get_vector_store(),
     )

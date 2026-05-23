@@ -1,19 +1,28 @@
 """
 app/schemas/response.py
 ========================
-Unified response schemas for the RAG pipeline.
+Unified response schemas for the SWARA RAG pipeline.
 
 These schemas define:
 - retrieval transparency
 - API response contracts
-- frontend response structure
+- frontend compatibility
+- observability metadata
+- diagnostics telemetry
 """
 
 from typing import List, Optional
 
-# pyrefly: ignore [missing-import]
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+)
 
+
+# =========================================================
+# RETRIEVED CHUNK
+# =========================================================
 
 class RetrievedChunk(BaseModel):
     """
@@ -21,7 +30,9 @@ class RetrievedChunk(BaseModel):
     """
 
     chunk_id: str
+
     text: str
+
     filename: str
 
     page_number: Optional[int] = None
@@ -31,11 +42,11 @@ class RetrievedChunk(BaseModel):
     similarity_score: float = Field(
         ge=0.0,
         le=1.0,
-        description="Cosine similarity score",
+        description="Semantic similarity score",
     )
 
     rank: int = Field(
-        description="Retrieval rank",
+        description="Retrieval ranking position",
     )
 
     timestamp: str = Field(
@@ -43,30 +54,69 @@ class RetrievedChunk(BaseModel):
     )
 
 
-class RAGResponse(BaseModel):
+# =========================================================
+# RETRIEVAL DIAGNOSTICS
+# =========================================================
+
+class RetrievalDiagnostics(BaseModel):
     """
-    Full response returned by the RAG pipeline.
+    Retrieval telemetry + observability metadata.
     """
 
-    # Prevent pydantic protected namespace warning
+    original_query: str
+
+    expanded_query: str
+
+    similarity_threshold: float
+
+    retrieved_chunk_count: int
+
+    filtered_chunk_count: int
+
+    top_similarity_score: Optional[float] = None
+
+    average_similarity_score: Optional[float] = None
+
+    embedding_time_ms: float
+
+    search_time_ms: float
+
+    retrieval_time_ms: float
+
+    factual_query_detected: bool
+
+
+# =========================================================
+# MAIN RAG RESPONSE
+# =========================================================
+
+class RAGResponse(BaseModel):
+    """
+    Full grounded response returned by the RAG pipeline.
+    """
+
     model_config = ConfigDict(
         protected_namespaces=(),
     )
 
     answer: str = Field(
-        description="LLM-generated grounded answer",
+        description="Grounded synthesized answer",
     )
 
     question: str = Field(
         description="Original user query",
     )
 
+    rewritten_query: str = Field(
+        description="Conversationally expanded query",
+    )
+
     retrieved_chunks: List[RetrievedChunk] = Field(
-        description="Retrieved context chunks",
+        description="Retrieved semantic chunks",
     )
 
     model_used: str = Field(
-        description="Groq model used for generation",
+        description="LLM model used for generation",
     )
 
     retrieval_time_ms: float
@@ -80,6 +130,12 @@ class RAGResponse(BaseModel):
         description="Whether fallback model was used",
     )
 
+    diagnostics: RetrievalDiagnostics
+
+
+# =========================================================
+# STANDARD ERROR RESPONSE
+# =========================================================
 
 class ErrorResponse(BaseModel):
     """
@@ -93,5 +149,8 @@ class ErrorResponse(BaseModel):
     code: int
 
 
-# Backward compatibility alias
+# =========================================================
+# BACKWARD COMPATIBILITY
+# =========================================================
+
 QueryResponse = RAGResponse

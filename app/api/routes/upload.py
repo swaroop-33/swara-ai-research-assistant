@@ -28,7 +28,7 @@ from fastapi import (
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.ingestion_service import IngestionService
-from vectorstore.chroma_store import VectorStore
+from vectorstore.chroma_store import VectorStore, get_vector_store
 
 router = APIRouter()
 
@@ -43,15 +43,16 @@ _vectorstore: VectorStore | None = None
 def _get_ingestion_service() -> IngestionService:
     global _ingestion_service
     if _ingestion_service is None:
-        _ingestion_service = IngestionService()
+        # CRITICAL: pass the shared singleton, not a new VectorStore()
+        _ingestion_service = IngestionService(
+            vectorstore=get_vector_store()
+        )
     return _ingestion_service
 
 
 def _get_vectorstore() -> VectorStore:
-    global _vectorstore
-    if _vectorstore is None:
-        _vectorstore = VectorStore()
-    return _vectorstore
+    # Always return the shared singleton
+    return get_vector_store()
 
 
 

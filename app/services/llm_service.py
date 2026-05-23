@@ -5,12 +5,18 @@ LLM answer generation service using Groq API + LangChain.
 """
 
 import time
+
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
 from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage
+
+from langchain_core.messages import (
+    HumanMessage,
+    SystemMessage,
+)
+
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -23,82 +29,105 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# ─────────────────────────────────────────────
-# Result Data Structure
-# ─────────────────────────────────────────────
+# =========================================================
+# RESULT DATA STRUCTURE
+# =========================================================
 
 @dataclass
 class LLMResult:
+
     answer: str
+
     model_used: str
+
     generation_time_ms: float
+
     fallback_used: bool
+
     prompt_tokens_est: int
 
 
-# ─────────────────────────────────────────────
-# FINAL CALIBRATED SYSTEM PROMPT
-# ─────────────────────────────────────────────
+# =========================================================
+# SYSTEM PROMPT
+# =========================================================
 
 SYSTEM_PROMPT = """
-You are SWARA, a grounded AI research assistant specialized in document understanding, synthesis, and contextual reasoning.
+You are SWARA, a grounded AI research assistant specialized in document understanding, contextual reasoning, narrative interpretation, and evidence-based synthesis.
 
-You must answer questions using ONLY the retrieved document context.
+You answer questions using ONLY the uploaded document content and retrieved evidence.
 
 PRIMARY OBJECTIVE:
-Provide accurate, coherent, evidence-grounded answers by synthesizing information across retrieved context chunks.
+Generate clear, natural, insightful, and well-grounded answers by synthesizing information across relevant document excerpts.
 
 GROUNDING RULES:
-1. Never fabricate facts not supported by the retrieved context.
+1. Never fabricate facts not supported by the uploaded documents.
 2. Never use outside knowledge.
-3. If evidence is insufficient, explicitly acknowledge the limitation.
-4. Avoid speculation or unsupported assumptions.
-5. Maintain factual consistency with retrieved evidence.
-6. Prefer grounded synthesis over isolated sentence extraction.
+3. If evidence is insufficient, clearly acknowledge uncertainty.
+4. Avoid unsupported assumptions or speculation.
+5. Keep all interpretations grounded in textual evidence.
+6. Prefer synthesis over direct extraction.
+
+CRITICAL RESPONSE RULES:
+1. NEVER mention:
+   - retrieved context
+   - retrieved chunks
+   - evidence numbers
+   - source numbering
+   - internal retrieval systems
+   - semantic search
+2. NEVER say phrases like:
+   - "Based on the retrieved context..."
+   - "According to the context..."
+   - "Evidence 1 suggests..."
+   - "The provided information states..."
+3. Speak naturally and directly as if you genuinely understood the document.
+4. Do not expose internal reasoning structure.
 
 SYNTHESIS RULES:
-1. Combine related evidence across multiple retrieved chunks.
-2. Produce coherent summaries instead of disconnected observations.
-3. Connect narrative, emotional, or thematic details when clearly supported by the retrieved context.
-4. Identify motivations, emotional states, relationships, and thematic patterns when multiple pieces of evidence consistently support them.
-5. Use careful interpretation when strongly supported by retrieved evidence.
-6. Avoid overly defensive phrasing when reasonable evidence-based synthesis is possible.
+1. Combine related details naturally across multiple excerpts.
+2. Infer motivations, emotions, relationships, and themes ONLY when strongly supported.
+3. Preserve ambiguity when evidence is incomplete.
+4. Avoid robotic summarization.
+5. Prioritize coherent interpretation over fragmented observations.
+6. Sound analytical but natural.
 
 CONVERSATIONAL CONTINUITY:
-1. Use recent conversation history to maintain continuity across follow-up questions.
-2. Resolve references and pronouns using the ongoing discussion context.
-3. Avoid contradicting earlier grounded answers unless new retrieved evidence changes the interpretation.
-4. Preserve conversational coherence across turns.
+1. Use recent conversation history carefully.
+2. Resolve references like:
+   - he
+   - she
+   - they
+   - him
+   - her
+   - them
+   - this event
+   - that decision
+   - that scene
+3. Maintain continuity across follow-up questions.
+4. Assume follow-up questions refer to previously discussed entities unless context suggests otherwise.
 
 ANSWER STYLE:
-- Use concise but complete explanations.
-- Use short paragraphs.
-- Use bullet points where useful.
-- Avoid repetitive wording.
-- Focus on clarity, synthesis, and evidence-grounded reasoning.
-- Sound analytical and confident when evidence is strong.
-- Clearly acknowledge uncertainty when evidence is weak.
+1. Use concise but complete explanations.
+2. Use short readable paragraphs.
+3. Use bullet points only when useful.
+4. Avoid repetitive wording.
+5. Avoid excessive hedging.
+6. Avoid over-explaining obvious details.
+7. Sound thoughtful, grounded, and conversational.
+8. Focus on interpretation and synthesis rather than quoting.
 
 FAILURE HANDLING:
-If the retrieved context does not sufficiently support the answer, respond clearly with:
+If the uploaded documents do not contain enough information to answer the question, respond EXACTLY with:
 
 "The uploaded documents do not contain sufficient relevant information to answer this question."
 
-The following context was retrieved from uploaded documents:
-
+Retrieved Context:
 {context}
 """
 
-# ─────────────────────────────────────────────
-# HUMAN TEMPLATE
-# ─────────────────────────────────────────────
-
-HUMAN_TEMPLATE = "Question: {question}"
-
-
-# ─────────────────────────────────────────────
+# =========================================================
 # LLM SERVICE
-# ─────────────────────────────────────────────
+# =========================================================
 
 class LLMService:
 
@@ -107,19 +136,27 @@ class LLMService:
         api_key: str | None = None,
         primary_model: str | None = None,
         fallback_model: str | None = None,
-        temperature: float = 0.2,
+        temperature: float = 0.3,
         max_tokens: int = 1500,
     ):
 
-        self._api_key = api_key or settings.groq_api_key
-        self._primary_model = (
-            primary_model or settings.groq_primary_model
+        self._api_key = (
+            api_key
+            or settings.groq_api_key
         )
+
+        self._primary_model = (
+            primary_model
+            or settings.groq_primary_model
+        )
+
         self._fallback_model = (
-            fallback_model or settings.groq_fallback_model
+            fallback_model
+            or settings.groq_fallback_model
         )
 
         self._temperature = temperature
+
         self._max_tokens = max_tokens
 
         if not self._api_key:
@@ -128,24 +165,27 @@ class LLMService:
                 "GROQ_API_KEY is not configured."
             )
 
-        self._primary_client = self._build_client(
-            self._primary_model
+        self._primary_client = (
+            self._build_client(
+                self._primary_model
+            )
         )
 
-        self._fallback_client = self._build_client(
-            self._fallback_model
+        self._fallback_client = (
+            self._build_client(
+                self._fallback_model
+            )
         )
 
         logger.info(
             f"LLMService initialized | "
             f"primary={self._primary_model} | "
-            f"fallback={self._fallback_model} | "
-            f"temperature={self._temperature}"
+            f"fallback={self._fallback_model}"
         )
 
-    # ─────────────────────────────────────────
-    # PUBLIC API
-    # ─────────────────────────────────────────
+    # =====================================================
+    # PUBLIC GENERATION API
+    # =====================================================
 
     def generate(
         self,
@@ -175,7 +215,10 @@ class LLMService:
 
         start = time.perf_counter()
 
+        # =================================================
         # PRIMARY MODEL
+        # =================================================
+
         try:
 
             logger.info(
@@ -193,15 +236,8 @@ class LLMService:
                 time.perf_counter() - start
             ) * 1000
 
-            logger.info(
-                f"LLM generation complete | "
-                f"model={self._primary_model} | "
-                f"time={elapsed_ms:.0f}ms",
-                extra={"ai_pipeline": True},
-            )
-
             return LLMResult(
-                answer=answer,
+                answer=answer.strip(),
                 model_used=self._primary_model,
                 generation_time_ms=elapsed_ms,
                 fallback_used=False,
@@ -214,12 +250,14 @@ class LLMService:
         except Exception as primary_error:
 
             logger.warning(
-                f"Primary model failed | "
-                f"error={primary_error}",
-                extra={"ai_pipeline": True},
+                f"Primary model failed: "
+                f"{str(primary_error)}"
             )
 
+        # =================================================
         # FALLBACK MODEL
+        # =================================================
+
         try:
 
             answer = self._invoke_with_retry(
@@ -232,7 +270,7 @@ class LLMService:
             ) * 1000
 
             return LLMResult(
-                answer=answer,
+                answer=answer.strip(),
                 model_used=self._fallback_model,
                 generation_time_ms=elapsed_ms,
                 fallback_used=True,
@@ -257,7 +295,8 @@ class LLMService:
 
             return LLMResult(
                 answer=(
-                    "⚠️ The AI answer service is temporarily unavailable."
+                    "⚠️ The AI answer service is "
+                    "temporarily unavailable."
                 ),
                 model_used="none",
                 generation_time_ms=elapsed_ms,
@@ -265,9 +304,9 @@ class LLMService:
                 prompt_tokens_est=0,
             )
 
-    # ─────────────────────────────────────────
+    # =====================================================
     # CLIENT CREATION
-    # ─────────────────────────────────────────
+    # =====================================================
 
     def _build_client(
         self,
@@ -281,9 +320,9 @@ class LLMService:
             max_tokens=self._max_tokens,
         )
 
-    # ─────────────────────────────────────────
+    # =====================================================
     # MESSAGE BUILDING
-    # ─────────────────────────────────────────
+    # =====================================================
 
     def _build_messages(
         self,
@@ -302,15 +341,42 @@ class LLMService:
 
             for msg in recent_history:
 
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
+                # =========================================
+                # SUPPORT BOTH DICTS + PYDANTIC OBJECTS
+                # =========================================
+
+                if isinstance(msg, dict):
+
+                    role = msg.get(
+                        "role",
+                        "user",
+                    )
+
+                    content = msg.get(
+                        "content",
+                        "",
+                    )
+
+                else:
+
+                    role = getattr(
+                        msg,
+                        "role",
+                        "user",
+                    )
+
+                    content = getattr(
+                        msg,
+                        "content",
+                        "",
+                    )
 
                 formatted_turns.append(
-                    f"{role.capitalize()}: {content}"
+                    f"{role.upper()}: {content}"
                 )
 
             conversation_text = (
-                "\n\nRecent Conversation:\n"
+                "RECENT CONVERSATION:\n\n"
                 + "\n".join(formatted_turns)
             )
 
@@ -318,19 +384,28 @@ class LLMService:
             context=context
         )
 
-        human_content = (
-            f"{conversation_text}\n\n"
-            f"Current Question: {question}"
-        )
+        human_content = f"""
+{conversation_text}
+
+CURRENT QUESTION:
+{question}
+
+IMPORTANT:
+Resolve ambiguous references using recent conversation history when appropriate.
+"""
 
         return [
-            SystemMessage(content=system_content),
-            HumanMessage(content=human_content),
+            SystemMessage(
+                content=system_content
+            ),
+            HumanMessage(
+                content=human_content
+            ),
         ]
 
-    # ─────────────────────────────────────────
+    # =====================================================
     # RETRY LOGIC
-    # ─────────────────────────────────────────
+    # =====================================================
 
     @retry(
         retry=retry_if_exception_type(Exception),
@@ -352,9 +427,9 @@ class LLMService:
 
         return response.content
 
-    # ─────────────────────────────────────────
+    # =====================================================
     # TOKEN ESTIMATION
-    # ─────────────────────────────────────────
+    # =====================================================
 
     @staticmethod
     def _estimate_tokens(
@@ -371,9 +446,9 @@ class LLMService:
         return total_chars // 4
 
 
-# ─────────────────────────────────────────────
+# =========================================================
 # SINGLETON FACTORY
-# ─────────────────────────────────────────────
+# =========================================================
 
 @lru_cache(maxsize=1)
 def get_llm_service() -> LLMService:

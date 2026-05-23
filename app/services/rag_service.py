@@ -1,19 +1,21 @@
+# app/services/rag_service.py
+
 """
-app/services/rag_service.py
-============================
-RAG orchestration service — coordinates retrieval + LLM answer generation.
+SWARA RAG orchestration service.
 """
 
+from __future__ import annotations
+
 import time
+
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import List, Optional
 
 from app.core.logging import get_logger
-from app.schemas.response import RetrievedChunk
-from app.services.retrieval_service import (
-    RetrievalResult,
-    RetrievalService,
+from app.schemas.response import (
+    RetrievedChunk,
+    RetrievalDiagnostics,
 )
 
 logger = get_logger(__name__)
@@ -21,52 +23,57 @@ logger = get_logger(__name__)
 MAX_CONTEXT_CHARS = 7000
 
 
-# ─────────────────────────────────────────────
-# Response Structure
-# ─────────────────────────────────────────────
+# =========================================================
+# INTERNAL RESPONSE
+# =========================================================
 
 @dataclass
 class RAGResponse:
+
     answer: str
+
     question: str
+
+    rewritten_query: str
+
     retrieved_chunks: List[RetrievedChunk]
+
     model_used: str
+
     retrieval_time_ms: float
+
     generation_time_ms: float
+
     total_time_ms: float
-    fallback_used: bool = False
+
+    fallback_used: bool
+
+    diagnostics: RetrievalDiagnostics
 
 
-# ─────────────────────────────────────────────
-# RAG Service
-# ─────────────────────────────────────────────
+# =========================================================
+# RAG SERVICE
+# =========================================================
 
 class RAGService:
-    """
-    Full RAG orchestration layer.
-
-    Flow:
-        Question
-        → Retrieval
-        → Context Build
-        → LLM Generation
-        → Structured Response
-    """
 
     def __init__(
         self,
-        retrieval_service: RetrievalService,
+        retrieval_service,
         llm_service=None,
     ):
+
         self._retrieval = retrieval_service
+
         self._llm = llm_service
 
         logger.info(
-            f"RAGService initialized | "
-            f"llm_ready={llm_service is not None}"
+            "RAGService initialized"
         )
 
-    # ─────────────────────────────────────────
+    # =====================================================
+    # MAIN PIPELINE
+    # =====================================================
 
     def answer(
         self,
@@ -77,103 +84,47 @@ class RAGService:
 
         total_start = time.perf_counter()
 
-        logger.info(
-            f"RAG pipeline started | question_len={len(question)}",
-            extra={"ai_pipeline": True},
-        )
+        question = question.strip()
 
-        # =================================================
-        # STEP 1 — RETRIEVAL
-        # =================================================
+        if not question:
 
-        retrieval: RetrievalResult = self._retrieval.retrieve(
+            raise ValueError(
+                "Question cannot be empty."
+            )
+
+        retrieval = self._retrieval.retrieve(
             query=question,
             n_results=n_results,
+            chat_history=chat_history,
         )
-
-        # =================================================
-        # NO DOCUMENTS
-        # =================================================
 
         if retrieval.total_chunks_in_store == 0:
 
-            return RAGResponse(
-                answer=(
-                    "⚠️ No document has been uploaded yet. "
-                    "Please upload a PDF or text file first."
-                ),
-                question=question,
-                retrieved_chunks=[],
-                model_used="none",
-                retrieval_time_ms=retrieval.retrieval_time_ms,
-                generation_time_ms=0.0,
-                total_time_ms=(
-                    time.perf_counter() - total_start
-                ) * 1000,
-                fallback_used=False,
+            return self._empty_store_response(
+                question,
+                retrieval,
+                total_start,
             )
-
-        # =================================================
-        # NO RELEVANT RETRIEVALS
-        # =================================================
 
         if retrieval.is_empty:
 
-            return RAGResponse(
-                answer=(
-                    "The uploaded documents do not contain "
-                    "sufficient relevant information to answer "
-                    "this question."
-                ),
-                question=question,
-                retrieved_chunks=[],
-                model_used="none",
-                retrieval_time_ms=retrieval.retrieval_time_ms,
-                generation_time_ms=0.0,
-                total_time_ms=(
-                    time.perf_counter() - total_start
-                ) * 1000,
-                fallback_used=True,
+            return self._no_match_response(
+                question,
+                retrieval,
+                total_start,
             )
-
-        # =================================================
-        # STEP 2 — CONTEXT BUILD
-        # =================================================
 
         context = self._build_context(
             retrieval.chunks
         )
 
-        # =================================================
-        # STEP 3 — GENERATION
-        # =================================================
-
         generation_start = time.perf_counter()
 
-        if self._llm is None:
-
-            answer_text = (
-                "[LLM not connected]\n\n"
-                + "\n\n".join(
-                    chunk.text
-                    for chunk in retrieval.chunks
-                )
-            )
-
-            model_used = "none"
-            fallback_used = False
-
-        else:
-
-            llm_result = self._llm.generate(
-                question=question,
-                context=context,
-                chat_history=chat_history,
-            )
-
-            answer_text = llm_result.answer
-            model_used = llm_result.model_used
-            fallback_used = llm_result.fallback_used
+        llm_result = self._llm.generate(
+            question=question,
+            context=context,
+            chat_history=chat_history,
+        )
 
         generation_time_ms = (
             time.perf_counter() - generation_start
@@ -183,44 +134,63 @@ class RAGService:
             time.perf_counter() - total_start
         ) * 1000
 
+        similarities = [
+            chunk.similarity_score
+            for chunk in retrieval.chunks
+        ]
+
+        diagnostics = RetrievalDiagnostics(
+            original_query=retrieval.original_query,
+            expanded_query=retrieval.expanded_query,
+            similarity_threshold=retrieval.similarity_threshold,
+            retrieved_chunk_count=len(
+                retrieval.chunks
+            ),
+            filtered_chunk_count=retrieval.filtered_chunk_count,
+            top_similarity_score=max(similarities),
+            average_similarity_score=(
+                sum(similarities)
+                / len(similarities)
+            ),
+            embedding_time_ms=retrieval.embedding_time_ms,
+            search_time_ms=retrieval.search_time_ms,
+            retrieval_time_ms=retrieval.retrieval_time_ms,
+            factual_query_detected=(
+                retrieval.factual_query_detected
+            ),
+        )
+
         logger.info(
-            f"RAG pipeline complete | "
+            f"RAG complete | "
             f"chunks={len(retrieval.chunks)} | "
-            f"model={model_used}",
+            f"model={llm_result.model_used}",
             extra={"ai_pipeline": True},
         )
 
         return RAGResponse(
-            answer=answer_text,
+            answer=llm_result.answer,
             question=question,
+            rewritten_query=retrieval.expanded_query,
             retrieved_chunks=retrieval.chunks,
-            model_used=model_used,
+            model_used=llm_result.model_used,
             retrieval_time_ms=retrieval.retrieval_time_ms,
             generation_time_ms=generation_time_ms,
             total_time_ms=total_time_ms,
-            fallback_used=fallback_used,
+            fallback_used=llm_result.fallback_used,
+            diagnostics=diagnostics,
         )
 
-    # ─────────────────────────────────────────
+    # =====================================================
     # CONTEXT BUILDER
-    # ─────────────────────────────────────────
+    # =====================================================
 
     def _build_context(
         self,
         chunks: List[RetrievedChunk],
     ) -> str:
 
-        # =============================================
-        # SORT STRONGEST EVIDENCE FIRST
-        # =============================================
-
-        chunks = sorted(
-            chunks,
-            key=lambda x: x.similarity_score,
-            reverse=True,
-        )
-
         parts = []
+
         total_chars = 0
 
         for idx, chunk in enumerate(
@@ -234,38 +204,14 @@ class RAGService:
                 else ""
             )
 
-            # =========================================
-            # PRIORITY LABELING
-            # =========================================
-
-            if idx == 1:
-
-                priority = "PRIMARY EVIDENCE"
-
-            elif idx <= 3:
-
-                priority = "SUPPORTING EVIDENCE"
-
-            else:
-
-                priority = "ADDITIONAL CONTEXT"
-
-            # =========================================
-            # CONTEXT ENTRY
-            # =========================================
-
             entry = (
-                f"=== {priority} ===\n"
+                f"=== EVIDENCE {idx} ===\n"
                 f"Source File: {chunk.filename}"
                 f"{page_info}\n"
-                f"Relevance Score: "
+                f"Similarity: "
                 f"{chunk.similarity_score:.2%}\n\n"
                 f"{chunk.text.strip()}"
             )
-
-            # =========================================
-            # CONTEXT LIMIT
-            # =========================================
 
             if (
                 total_chars + len(entry)
@@ -277,35 +223,103 @@ class RAGService:
 
             total_chars += len(entry)
 
-        # =============================================
-        # SYNTHESIS INSTRUCTION
-        # =============================================
+        return "\n\n".join(parts)
 
-        synthesis_instruction = """
-Use the retrieved evidence above to produce a coherent grounded answer.
+    # =====================================================
+    # FAILURE RESPONSES
+    # =====================================================
 
-Prioritize:
-- strongest evidence first
-- cross-chunk synthesis
-- narrative consistency
-- grounded interpretation
+    def _empty_store_response(
+        self,
+        question,
+        retrieval,
+        total_start,
+    ):
 
-Do not fabricate unsupported details.
-"""
+        total_time_ms = (
+            time.perf_counter() - total_start
+        ) * 1000
 
-        return (
-            synthesis_instruction
-            + "\n\n"
-            + "\n\n".join(parts)
+        diagnostics = RetrievalDiagnostics(
+            original_query=question,
+            expanded_query=question,
+            similarity_threshold=0.0,
+            retrieved_chunk_count=0,
+            filtered_chunk_count=0,
+            top_similarity_score=None,
+            average_similarity_score=None,
+            embedding_time_ms=0.0,
+            search_time_ms=0.0,
+            retrieval_time_ms=0.0,
+            factual_query_detected=False,
+        )
+
+        return RAGResponse(
+            answer=(
+                "⚠️ No document has been uploaded yet."
+            ),
+            question=question,
+            rewritten_query=question,
+            retrieved_chunks=[],
+            model_used="none",
+            retrieval_time_ms=0.0,
+            generation_time_ms=0.0,
+            total_time_ms=total_time_ms,
+            fallback_used=False,
+            diagnostics=diagnostics,
+        )
+
+    def _no_match_response(
+        self,
+        question,
+        retrieval,
+        total_start,
+    ):
+
+        total_time_ms = (
+            time.perf_counter() - total_start
+        ) * 1000
+
+        diagnostics = RetrievalDiagnostics(
+            original_query=retrieval.original_query,
+            expanded_query=retrieval.expanded_query,
+            similarity_threshold=retrieval.similarity_threshold,
+            retrieved_chunk_count=0,
+            filtered_chunk_count=retrieval.filtered_chunk_count,
+            top_similarity_score=None,
+            average_similarity_score=None,
+            embedding_time_ms=retrieval.embedding_time_ms,
+            search_time_ms=retrieval.search_time_ms,
+            retrieval_time_ms=retrieval.retrieval_time_ms,
+            factual_query_detected=(
+                retrieval.factual_query_detected
+            ),
+        )
+
+        return RAGResponse(
+            answer=(
+                "The uploaded documents do not contain "
+                "sufficient relevant information to answer "
+                "this question."
+            ),
+            question=question,
+            rewritten_query=retrieval.expanded_query,
+            retrieved_chunks=[],
+            model_used="none",
+            retrieval_time_ms=retrieval.retrieval_time_ms,
+            generation_time_ms=0.0,
+            total_time_ms=total_time_ms,
+            fallback_used=False,
+            diagnostics=diagnostics,
         )
 
 
-# ─────────────────────────────────────────────
-# Singleton Factory
-# ─────────────────────────────────────────────
+# =========================================================
+# SINGLETON FACTORY
+# =========================================================
 
 @lru_cache(maxsize=1)
-def get_rag_service() -> "RAGService":
+def get_rag_service():
 
     from app.services.llm_service import (
         get_llm_service,
@@ -315,7 +329,9 @@ def get_rag_service() -> "RAGService":
         get_retrieval_service,
     )
 
-    logger.info("Creating RAGService singleton...")
+    logger.info(
+        "Creating RAGService singleton..."
+    )
 
     return RAGService(
         retrieval_service=get_retrieval_service(),

@@ -1,6 +1,6 @@
 import streamlit as st
 import re
-import html
+import time
 
 # =========================================================
 # SOURCE CARD
@@ -12,7 +12,7 @@ def render_source_card(
     colors,
 ):
     """
-    Premium source rendering.
+    Premium grounded source rendering.
     """
 
     # =====================================================
@@ -54,24 +54,12 @@ def render_source_card(
         relevance = 0
 
     # =====================================================
-    # SAFETY ESCAPE
+    # CONTENT LIMIT
     # =====================================================
 
-    content = html.escape(content)
-
-    # =====================================================
-    # TRUNCATION
-    # =====================================================
-
-    preview_limit = 320
-
-    full_content = content
-
-    truncated = False
+    preview_limit = 520
 
     if len(content) > preview_limit:
-
-        truncated = True
 
         content = (
             content[:preview_limit]
@@ -79,247 +67,42 @@ def render_source_card(
         )
 
     # =====================================================
-    # SOURCE LABEL COLOR
+    # RELEVANCE LABEL
     # =====================================================
 
-    if relevance >= 80:
+    if relevance >= 85:
 
-        relevance_color = "#22C55E"
+        relevance_label = "Very High"
 
-    elif relevance >= 60:
+    elif relevance >= 70:
 
-        relevance_color = "#F59E0B"
+        relevance_label = "High"
+
+    elif relevance >= 55:
+
+        relevance_label = "Medium"
 
     else:
 
-        relevance_color = "#EF4444"
+        relevance_label = "Low"
 
     # =====================================================
-    # MAIN SOURCE CARD
+    # RENDER SOURCE CARD
     # =====================================================
 
     st.markdown(
         f"""
-        <div style="
-            background:
-                {colors['card_bg']};
+---
+#### 📄 Source {idx + 1}
 
-            border:
-                1px solid {colors['border']};
+**File:** {filename}  
+**Page:** {page}  
+**Relevance:** {relevance_label}
 
-            border-radius:
-                18px;
-
-            padding:
-                1rem 1rem 0.9rem 1rem;
-
-            margin-bottom:
-                0.9rem;
-
-            backdrop-filter:
-                blur(18px);
-
-            transition:
-                all 0.2s ease;
-
-            box-shadow:
-                0 4px 16px rgba(0,0,0,0.08);
-        ">
-
-            <!-- HEADER -->
-
-            <div style="
-                display:
-                    flex;
-
-                justify-content:
-                    space-between;
-
-                align-items:
-                    center;
-
-                gap:
-                    1rem;
-
-                margin-bottom:
-                    0.8rem;
-            ">
-
-                <!-- FILE -->
-
-                <div style="
-                    font-weight:
-                        700;
-
-                    font-size:
-                        0.95rem;
-
-                    color:
-                        {colors['text']};
-
-                    overflow:
-                        hidden;
-
-                    text-overflow:
-                        ellipsis;
-
-                    white-space:
-                        nowrap;
-                ">
-                    📄 {filename}
-                </div>
-
-                <!-- META -->
-
-                <div style="
-                    display:
-                        flex;
-
-                    align-items:
-                        center;
-
-                    gap:
-                        0.55rem;
-
-                    flex-shrink:
-                        0;
-                ">
-
-                    <div style="
-                        font-size:
-                            0.78rem;
-
-                        color:
-                            {colors['muted_text']};
-                    ">
-                        Page {page}
-                    </div>
-
-                    <div style="
-                        padding:
-                            0.22rem 0.55rem;
-
-                        border-radius:
-                            999px;
-
-                        font-size:
-                            0.72rem;
-
-                        font-weight:
-                            700;
-
-                        background:
-                            rgba(255,255,255,0.06);
-
-                        color:
-                            {relevance_color};
-
-                        border:
-                            1px solid rgba(255,255,255,0.05);
-                    ">
-                        {relevance}%
-                    </div>
-
-                </div>
-
-            </div>
-
-            <!-- CONTENT -->
-
-            <div style="
-                color:
-                    {colors['text']};
-
-                font-size:
-                    0.91rem;
-
-                line-height:
-                    1.75;
-
-                white-space:
-                    pre-wrap;
-
-                opacity:
-                    0.96;
-            ">
-                {content}
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
+> {content}
+        """
     )
 
-    # =====================================================
-    # FULL SOURCE EXPAND
-    # =====================================================
-
-    if truncated:
-
-        st.markdown(
-            f"""
-            <details style="
-                margin-top:
-                    -0.2rem;
-
-                margin-bottom:
-                    1rem;
-            ">
-
-                <summary style="
-                    cursor:
-                        pointer;
-
-                    color:
-                        {colors['accent']};
-
-                    font-size:
-                        0.88rem;
-
-                    font-weight:
-                        600;
-
-                    transition:
-                        all 0.2s ease;
-                ">
-                    View Full Source #{idx}
-                </summary>
-
-                <div style="
-                    margin-top:
-                        0.75rem;
-
-                    padding:
-                        1rem;
-
-                    border-radius:
-                        16px;
-
-                    background:
-                        {colors['card_bg']};
-
-                    border:
-                        1px solid {colors['border']};
-
-                    color:
-                        {colors['text']};
-
-                    line-height:
-                        1.75;
-
-                    white-space:
-                        pre-wrap;
-
-                    box-shadow:
-                        0 4px 16px rgba(0,0,0,0.08);
-                ">
-                    {full_content}
-                </div>
-
-            </details>
-            """,
-            unsafe_allow_html=True,
-        )
 
 # =========================================================
 # CLEAN ANSWER TEXT
@@ -329,22 +112,18 @@ def clean_answer_text(
     text,
 ):
     """
-    Improve readability of assistant responses
-    while preserving markdown structure.
+    Improve assistant readability
+    while preserving markdown formatting.
     """
 
     if not text:
 
         return ""
 
-    # =====================================================
-    # TRIM
-    # =====================================================
-
     text = text.strip()
 
     # =====================================================
-    # NORMALIZE EXCESSIVE SPACING
+    # REMOVE EXCESSIVE SPACING
     # =====================================================
 
     text = re.sub(
@@ -354,7 +133,17 @@ def clean_answer_text(
     )
 
     # =====================================================
-    # REMOVE TRAILING SPACES
+    # IMPROVE BULLET FORMATTING
+    # =====================================================
+
+    text = re.sub(
+        r"•",
+        "\n•",
+        text,
+    )
+
+    # =====================================================
+    # CLEAN TRAILING SPACES
     # =====================================================
 
     lines = [
@@ -366,6 +155,69 @@ def clean_answer_text(
 
     return text
 
+
+# =========================================================
+# INLINE CITATION INJECTION
+# =========================================================
+
+def inject_inline_citations(
+    answer,
+    sources,
+):
+    """
+    Inject lightweight inline citations
+    while preserving readability.
+    """
+
+    if not answer:
+
+        return ""
+
+    if not sources:
+
+        return answer
+
+    # Avoid duplicates
+    if "[Source" in answer:
+
+        return answer
+
+    answer = answer.strip()
+
+    paragraphs = answer.split("\n\n")
+
+    enhanced = []
+
+    for idx, para in enumerate(paragraphs):
+
+        para = para.strip()
+
+        if not para:
+
+            continue
+
+        source_num = min(
+            idx + 1,
+            len(sources),
+        )
+
+        # Skip tiny fragments
+        if len(para) < 40:
+
+            enhanced.append(para)
+
+            continue
+
+        para = (
+            para
+            + f" [Source {source_num}]"
+        )
+
+        enhanced.append(para)
+
+    return "\n\n".join(enhanced)
+
+
 # =========================================================
 # FORMAT CITATIONS
 # =========================================================
@@ -375,7 +227,7 @@ def format_citations(
     sources,
 ):
     """
-    Style source citations cleanly.
+    Format citations for stable markdown rendering.
     """
 
     if not answer:
@@ -385,8 +237,52 @@ def format_citations(
     formatted = re.sub(
         r"\[Source (\d+)\]",
         lambda m:
-            f"<span style='font-weight:700;'>[Source {m.group(1)}]</span>",
+            f"`[Source {m.group(1)}]`",
         answer,
     )
 
     return formatted
+
+
+# =========================================================
+# STREAM RESPONSE
+# =========================================================
+
+def stream_response(
+    response_placeholder,
+    text,
+    delay=0.015,
+):
+    """
+    Smooth frontend streaming effect.
+
+    Simulates token streaming
+    without backend websocket complexity.
+    """
+
+    if not text:
+
+        response_placeholder.markdown("")
+
+        return
+
+    words = text.split()
+
+    streamed = ""
+
+    for idx, word in enumerate(words):
+
+        streamed += word + " "
+
+        # Preserve markdown rendering
+        response_placeholder.markdown(
+            streamed
+        )
+
+        # Small delay for realism
+        time.sleep(delay)
+
+    # Final clean render
+    response_placeholder.markdown(
+        streamed.strip()
+    )
