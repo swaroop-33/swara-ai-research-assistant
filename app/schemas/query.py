@@ -55,3 +55,8 @@ class QueryRequest(BaseModel):
         default_factory=list,
         description="Recent conversation history",
     )
+
+    session_id: Optional[str] = Field(
+        default="default",
+        description="Unique session identifier for isolated context. Defaults to 'default' for backward compatibility.",
+    )

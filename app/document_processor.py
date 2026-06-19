@@ -22,8 +22,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import pypdf
-
 import fitz
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -357,9 +355,11 @@ def chunk_document(
       - If the document is shorter than chunk_size, it becomes a single chunk.
       - Overlap must be < chunk_size (enforced with assertion).
     """
-    assert chunk_overlap < chunk_size, (
-        f"chunk_overlap ({chunk_overlap}) must be less than chunk_size ({chunk_size})"
-    )
+    if chunk_overlap >= chunk_size:
+        raise ValueError(
+            f"chunk_overlap ({chunk_overlap}) must be less than "
+            f"chunk_size ({chunk_size})"
+        )
 
     # Step 1: Build full text and page map
     full_text, page_map = _build_page_map(extraction.pages)

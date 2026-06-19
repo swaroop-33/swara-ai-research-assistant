@@ -1,4 +1,6 @@
+import os
 import time
+import uuid
 import requests
 import streamlit as st
 
@@ -8,6 +10,7 @@ from ui_helpers import (
     inject_inline_citations,
     render_source_card,
 )
+from theme import apply_theme, LIGHT_COLORS, DARK_COLORS
 
 # =========================================================
 # PAGE CONFIG
@@ -15,27 +18,47 @@ from ui_helpers import (
 
 st.set_page_config(
     page_title="SWARA",
-    page_icon="🦥",
+    page_icon="✨",
     layout="wide",
 )
+
+# Initialize dark mode state if not exists
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+# Apply the global CSS via theme.py
+apply_theme(st.session_state.dark_mode)
+
+# Load current colors for inline styles
+theme_colors = DARK_COLORS if st.session_state.dark_mode else LIGHT_COLORS
 
 # =========================================================
 # API CONFIG
 # =========================================================
 
-API_BASE = "http://localhost:8000/api/v1"
+API_BASE = os.environ.get(
+    "SWARA_API_BASE",
+    "http://localhost:8000/api/v1",
+)
 
 # =========================================================
 # SESSION STATE
 # =========================================================
 
-if "messages" not in st.session_state:
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 
+if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "uploaded_files" not in st.session_state:
-
     st.session_state.uploaded_files = []
+
+if "questions_asked" not in st.session_state:
+    st.session_state.questions_asked = 0
+
+if "sources_retrieved" not in st.session_state:
+    st.session_state.sources_retrieved = 0
 
 # =========================================================
 # SIDEBAR
@@ -43,248 +66,152 @@ if "uploaded_files" not in st.session_state:
 
 with st.sidebar:
 
-    st.markdown("# 🦥 SWARA")
+    st.title("✨ SWARA")
+    st.caption("Grounded AI Research Assistant")
+    
+    st.toggle("🌙 Dark Mode", key="dark_mode")
 
-    st.write("")
+    st.divider()
+
+    if st.button("✨ New Chat", use_container_width=True, type="primary"):
+        st.session_state.messages = []
+        st.session_state.uploaded_files = []
+        st.session_state.questions_asked = 0
+        st.session_state.sources_retrieved = 0
+        st.session_state.session_id = str(uuid.uuid4())
+        st.rerun()
+
+    st.markdown("### 📚 Knowledge Base")
 
     uploaded_files = st.file_uploader(
-        "Upload Document",
+        "Upload Documents",
         type=["pdf", "txt"],
         accept_multiple_files=True,
-        help="Limit 200MB per file • PDF, TXT",
+        help="PDF or TXT • Drag and drop supported",
     )
 
-    # =====================================================
-    # FILE UPLOAD
-    # =====================================================
-
     if uploaded_files:
-
         for file in uploaded_files:
-
-            if (
-                file.name
-                not in st.session_state.uploaded_files
-            ):
-
+            if file.name not in st.session_state.uploaded_files:
+                progress = st.empty()
+                
                 try:
+                    progress.info("✨ Uploading your document...")
+                    time.sleep(0.3)
+                    progress.info("📖 Reading document contents...")
+                    time.sleep(0.3)
+                    progress.info("🧠 Understanding document knowledge...")
+                    time.sleep(0.3)
 
-                    files = {
-                        "file": (
-                            file.name,
-                            file,
-                            file.type,
-                        )
-                    }
-
-                    
-                    try:
-
-                        progress_placeholder = st.empty()
-
-                        progress_placeholder.markdown(
-                            """
-                            🦥 Processing document...
-                            
-                            ░░░░░░░░░░ 0%
-                            """
-                        )
-
-                        time.sleep(0.2)
-
-                        progress_placeholder.markdown(
-                            """
-                            🦥 Extracting document text...
-        
-                            ███░░░░░░░ 30%
-                            """
-                        )
-
-                        time.sleep(0.3)
-
-                        progress_placeholder.markdown(
-                            """
-                            🦥 Generating embeddings...
-                            
-                            ███████░░░ 70%
-                            """
-                        )
-
-                        time.sleep(0.4)
-
-                        response = requests.post(
-                            f"{API_BASE}/upload",
-                            files=files,
-                            timeout=120,
-                        )
-
-                        progress_placeholder.markdown(
-                            """
-                            🦥 Finalizing vector storage...
-        
-                            ██████████ 100%
-                            """
-                        )
-
-                        time.sleep(0.4)
-
-                        progress_placeholder.empty()
-
-                        if response.status_code == 200:
-
-                            
-                            if (
-                                file.name
-                                not in st.session_state.uploaded_files
-                            ):
-
-                                st.session_state.uploaded_files.append(
-                                    file.name
-                            )
-
-                            st.success(
-                                f"✓ Uploaded: {file.name}"
-                            )
-
-                        else:
-
-                            st.error(
-                                f"Upload failed: "
-                                f"{response.text}"
-                            )
-
-                    except Exception as e:
-
-                        st.error(
-                            f"Upload failed: {e}"
-                        )
-
-
-
-                    if response.status_code == 200:
-
-                        st.session_state.uploaded_files.append(
-                            file.name
-                        )
-
-                    else:
-
-                        st.error(
-                            f"Upload failed: "
-                            f"{response.text}"
-                        )
-
-                except Exception as e:
-
-                    st.error(
-                        f"Upload failed: {e}"
+                    response = requests.post(
+                        f"{API_BASE}/upload",
+                        files={"file": (file.name, file, file.type)},
+                        data={"session_id": st.session_state.session_id},
+                        timeout=120,
                     )
 
-    # =====================================================
-    # UPLOADED FILES
-    # =====================================================
+                    progress.info("🚀 Preparing SWARA for questions...")
+                    time.sleep(0.4)
+                    progress.empty()
+
+                    if response.status_code == 200:
+                        if file.name not in st.session_state.uploaded_files:
+                            st.session_state.uploaded_files.append(file.name)
+                        st.success(f"✓ {file.name}")
+                    else:
+                        st.error(f"Upload failed: {response.text}")
+
+                except Exception as e:
+                    progress.empty()
+                    st.error(f"Upload failed: {e}")
 
     if st.session_state.uploaded_files:
+        st.markdown("### 📄 Uploaded Documents")
+        for fname in st.session_state.uploaded_files:
+            st.markdown(f"- **{fname}**")
 
-        st.write("")
+    st.divider()
+    
+    st.markdown("### 📊 Session Stats")
+    
+    col1, col2 = st.columns(2)
+    col1.metric("Documents", len(st.session_state.uploaded_files))
+    col2.metric("Questions", st.session_state.questions_asked)
+    st.metric("Sources Retrieved", st.session_state.sources_retrieved)
 
-        st.markdown("### Uploaded Files")
-
-        for filename in (
-            st.session_state.uploaded_files
-        ):
-
-            st.markdown(
-                f"📄 {filename}"
-            )
 
 # =========================================================
-# MAIN HEADER
+# MAIN AREA — WELCOME STATE
 # =========================================================
 
-st.markdown("# 🦥 SWARA")
-if st.button(
-    "🗑️ New Chat",
-    use_container_width=True,
-):
+if not st.session_state.messages:
 
-    st.session_state.messages = []
+    st.markdown(f"<h1 style='text-align: center; font-size: 56px; color: {theme_colors['accent_primary']};'>✨ SWARA</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='text-align: center; color: {theme_colors['accent_secondary']};'>Grounded AI Research Assistant</h3>", unsafe_allow_html=True)
+    st.markdown(f"<p style='text-align: center; color: {theme_colors['text_muted']};'>Upload PDFs · Ask Questions · Get Verified Answers with Citations</p>", unsafe_allow_html=True)
+    
+    st.write("")
+    st.write("")
 
-    st.rerun()
+    col1, col2, col3 = st.columns(3)
 
-st.caption(
-    "Grounded AI research assistant. "
-    "Upload a document and start asking questions."
-)
+    with col1:
+        with st.container(border=True):
+            st.markdown("## 📄")
+            st.markdown("#### Upload Documents")
+            st.caption("Upload PDFs and text files to build your knowledge base")
+
+    with col2:
+        with st.container(border=True):
+            st.markdown("## 💬")
+            st.markdown("#### Ask Questions")
+            st.caption("Ask anything about your documents and get grounded answers")
+
+    with col3:
+        with st.container(border=True):
+            st.markdown("## 📌")
+            st.markdown("#### Verified Citations")
+            st.caption("Every answer comes with source citations you can verify")
+
+    st.write("")
+    st.info("👋 Upload a document in the sidebar, then ask your first question below")
+
 
 # =========================================================
 # CHAT HISTORY
 # =========================================================
 
 for message in st.session_state.messages:
-
     with st.chat_message(message["role"]):
+        st.markdown(message["content"], unsafe_allow_html=True)
 
-        st.markdown(message["content"])
+        if message["role"] == "assistant" and message.get("sources"):
+            with st.expander("📌 View Sources & Citations"):
+                for idx, source in enumerate(message["sources"]):
+                    render_source_card(source, idx, {})
 
-        if (
-            message["role"] == "assistant"
-            and message.get("sources")
-        ):
-
-            with st.expander(
-                "▼ View Sources"
-            ):
-
-                for idx, source in enumerate(
-                    message["sources"]
-                ):
-
-                    render_source_card(
-                        source,
-                        idx,
-                        {},
-                    )
 
 # =========================================================
 # USER INPUT
 # =========================================================
 
-prompt = st.chat_input(
-    "Ask a question about your documents..."
-)
+prompt = st.chat_input("Ask a question about your documents...")
 
 if prompt:
 
-    # =====================================================
-    # USER MESSAGE
-    # =====================================================
-
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": prompt,
-        }
-    )
+    st.session_state.messages.append({
+        "role": "user",
+        "content": prompt,
+    })
 
     with st.chat_message("user"):
-
-        st.markdown(prompt)
-
-    # =====================================================
-    # ASSISTANT MESSAGE
-    # =====================================================
+        st.markdown(prompt, unsafe_allow_html=True)
 
     with st.chat_message("assistant"):
-
         thinking = st.empty()
-
-        thinking.markdown(
-            "🦥 Thinking..."
-        )
+        thinking.info("✨ Thinking...")
 
         try:
-
             payload = {
                 "question": prompt,
                 "top_k": 6,
@@ -295,6 +222,7 @@ if prompt:
                     }
                     for m in st.session_state.messages[-10:]
                 ],
+                "session_id": st.session_state.session_id,
             }
 
             response = requests.post(
@@ -304,101 +232,49 @@ if prompt:
             )
 
             if response.status_code != 200:
-
-                st.error(
-                    f"Query failed: "
-                    f"{response.text}"
-                )
+                st.error(f"Query failed: {response.text}")
 
             else:
-
                 data = response.json()
 
-                answer = clean_answer_text(
-                    data["answer"]
-                )
-
+                answer = clean_answer_text(data["answer"])
                 answer = inject_inline_citations(
                     answer,
-                    data.get(
-                        "retrieved_chunks",
-                        [],
-                    ),
+                    data.get("retrieved_chunks", []),
                 )
-
                 answer = format_citations(
                     answer,
-                    data.get(
-                        "retrieved_chunks",
-                        [],
-                    ),
+                    data.get("retrieved_chunks", []),
                 )
-
-                # =========================================
-                # STREAMING EFFECT
-                # =========================================
 
                 thinking.empty()
-
-                stream_placeholder = (
-                    st.empty()
-                )
-
+                stream_placeholder = st.empty()
                 streamed = ""
-
                 words = answer.split()
 
                 for word in words:
-
                     streamed += word + " "
-
-                    stream_placeholder.markdown(
-                        streamed + "▌"
-                    )
-
+                    stream_placeholder.markdown(streamed + "▌", unsafe_allow_html=True)
                     time.sleep(0.01)
 
-                stream_placeholder.markdown(
-                    streamed
-                )
+                stream_placeholder.markdown(streamed, unsafe_allow_html=True)
 
-                # =========================================
-                # SOURCES
-                # =========================================
-
-                sources = data.get(
-                    "retrieved_chunks",
-                    [],
-                )
+                sources = data.get("retrieved_chunks", [])
 
                 if sources:
+                    with st.expander("📌 View Sources & Citations"):
+                        for idx, source in enumerate(sources):
+                            render_source_card(source, idx, {})
 
-                    with st.expander(
-                        "▼ View Sources"
-                    ):
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": streamed,
+                    "sources": sources,
+                })
 
-                        for idx, source in enumerate(
-                            sources
-                        ):
-
-                            render_source_card(
-                                source,
-                                idx,
-                                {},
-                            )
-
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": streamed,
-                        "sources": sources,
-                    }
-                )
+                st.session_state.questions_asked += 1
+                st.session_state.sources_retrieved += len(sources)
 
         except Exception as e:
-
             thinking.empty()
-
-            st.error(
-                f"Query failed: {e}"
-            )
+            st.error(f"Query failed: {e}")

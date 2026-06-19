@@ -42,6 +42,7 @@ async def query_documents(
 
     logger.info(
         f"Query received | "
+        f"session_id={request.session_id} | "
         f"question='{request.question[:80]}'",
         extra={"ai_pipeline": True},
     )
@@ -54,6 +55,7 @@ async def query_documents(
             question=request.question,
             n_results=request.top_k,
             chat_history=request.chat_history,
+            session_id=request.session_id,
         )
 
         response = RAGResponse(
@@ -85,6 +87,7 @@ async def query_documents(
 
         logger.info(
             f"Query completed | "
+            f"session_id={request.session_id} | "
             f"chunks={len(response.retrieved_chunks)} | "
             f"model={response.model_used}",
             extra={"ai_pipeline": True},

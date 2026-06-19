@@ -24,8 +24,10 @@ uploads/
 
 # Vector Databases
 vector_store/
-vectorstore/
 chroma_db/
+# Note: vectorstore/ is the Python source package — do NOT ignore it
+# Only ignore data subdirectories if they appear inside it
+vectorstore/data/
 
 # Testing / Cache
 .pytest_cache/

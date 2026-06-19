@@ -240,7 +240,11 @@ class EmbeddingEngine:
         Returns:
             List of embedding vectors as native Python float lists.
         """
-        assert self._model is not None, "Model not loaded — call _load_model() first"
+        if self._model is None:
+            raise RuntimeError(
+                "Embedding model not loaded — "
+                "_load_model() must be called before encoding."
+            )
 
         try:
             # convert_to_numpy=True is the default and fastest path on CPU.

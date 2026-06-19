@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8000)
-    api_reload: bool = Field(default=True)
+    api_reload: bool = Field(default=False)
 
     # ─────────────────────────────────────────────
     # Uploads

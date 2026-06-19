@@ -14,6 +14,11 @@ Run with:
     uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 """
 
+import os
+
+# Disable ChromaDB telemetry before any chromadb module is imported
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -27,10 +32,6 @@ from app.core.logging import setup_logging, get_logger
 from app.api.routes import health, upload, query
 
 logger = get_logger(__name__)
-
-import os
-
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

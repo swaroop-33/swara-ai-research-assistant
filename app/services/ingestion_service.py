@@ -123,6 +123,7 @@ class IngestionService:
         self,
         file_path: str | Path,
         filename: str,
+        session_id: str = "default",
     ) -> IngestionResult:
         """
         Complete upload pipeline.
@@ -139,7 +140,7 @@ class IngestionService:
         file_path = Path(file_path)
 
         logger.info(
-            f"Ingestion started | file={filename}",
+            f"Ingestion started | file={filename} | session_id={session_id}",
             extra={"ai_pipeline": True},
         )
 
@@ -223,6 +224,7 @@ class IngestionService:
                 add_result: AddResult = self.vectorstore.add_documents(
                     chunks=chunks,
                     embeddings=embeddings,
+                    session_id=session_id,
                 )
         except Exception as e:
             logger.error(

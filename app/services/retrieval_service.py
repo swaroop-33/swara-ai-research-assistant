@@ -98,6 +98,7 @@ class RetrievalService:
         query: str,
         n_results: Optional[int] = None,
         chat_history: Optional[list] = None,
+        session_id: str = "default",
     ) -> RetrievalResult:
 
         original_query = query.strip()
@@ -120,7 +121,8 @@ class RetrievalService:
         logger.info(
             f"Retrieval started | "
             f"query='{expanded_query[:120]}' | "
-            f"k={k}",
+            f"k={k} | "
+            f"session_id={session_id}",
             extra={"ai_pipeline": True},
         )
 
@@ -128,7 +130,7 @@ class RetrievalService:
         # STORE VALIDATION
         # =================================================
 
-        stats = self._vector_store.get_stats()
+        stats = self._vector_store.get_stats(session_id=session_id)
 
         if stats.total_chunks == 0:
 
@@ -181,6 +183,7 @@ class RetrievalService:
         chunks = self._vector_store.query(
             query_vector,
             n_results=internal_k,
+            session_id=session_id,
         )
 
         # =================================================
@@ -380,17 +383,17 @@ class RetrievalService:
     # VECTOR STORE OPS
     # =====================================================
 
-    def get_store_stats(self):
+    def get_store_stats(self, session_id: str = "default"):
 
-        return self._vector_store.get_stats()
+        return self._vector_store.get_stats(session_id=session_id)
 
-    def clear_store(self) -> None:
+    def clear_store(self, session_id: str = "default") -> None:
 
         logger.info(
-            "Clearing vector store..."
+            f"Clearing vector store... | session_id={session_id}"
         )
 
-        self._vector_store.clear_collection()
+        self._vector_store.clear_collection(session_id=session_id)
 
 
 # =========================================================

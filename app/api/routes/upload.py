@@ -1,4 +1,3 @@
-
 """
 app/api/routes/upload.py
 =========================
@@ -20,6 +19,7 @@ from pathlib import Path
 from fastapi import (
     APIRouter,
     File,
+    Form,
     HTTPException,
     UploadFile,
     status,
@@ -28,6 +28,7 @@ from fastapi import (
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.ingestion_service import IngestionService
+from app.utils.file_utils import sanitize_filename
 from vectorstore.chroma_store import VectorStore, get_vector_store
 
 router = APIRouter()
@@ -63,6 +64,7 @@ def _get_vectorstore() -> VectorStore:
 )
 async def upload_document(
     file: UploadFile = File(...),
+    session_id: str = Form("default"),
 ):
     """
     Upload a document and run the full ingestion pipeline.
@@ -82,14 +84,28 @@ async def upload_document(
             detail="Filename is missing.",
         )
 
+    # Sanitize filename to prevent path traversal attacks
+    safe_filename = sanitize_filename(file.filename)
+    if not safe_filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid filename.",
+        )
+        
+    # Sanitize session_id to prevent path traversal attacks
+    safe_session_id = "".join(c for c in session_id if c.isalnum() or c in ('_', '-'))
+    if not safe_session_id:
+        safe_session_id = "default"
+
     logger.info(
-        f"Upload received | filename={file.filename}",
+        f"Upload received | filename={safe_filename} | session_id={safe_session_id}",
         extra={"ai_pipeline": True},
     )
 
-    upload_dir = Path(settings.upload_dir)
+    # Store files in isolated session directories
+    upload_dir = Path(settings.upload_dir) / safe_session_id
     upload_dir.mkdir(parents=True, exist_ok=True)
-    file_path = upload_dir / file.filename
+    file_path = upload_dir / safe_filename
 
     try:
         # Save uploaded file
@@ -99,7 +115,8 @@ async def upload_document(
         # Run ingestion pipeline
         result = _get_ingestion_service().ingest_file(
             file_path=file_path,
-            filename=file.filename,
+            filename=safe_filename,
+            session_id=safe_session_id,
         )
 
         if not result.success:
@@ -111,6 +128,7 @@ async def upload_document(
         logger.info(
             f"Upload complete | "
             f"file={file.filename} | "
+            f"session_id={safe_session_id} | "
             f"chunks={result.stats.total_chunks}",
             extra={"ai_pipeline": True},
         )
@@ -144,16 +162,18 @@ async def upload_document(
     "/stats",
     summary="Get Vector Store Statistics",
 )
-async def get_stats():
+async def get_stats(
+    session_id: str = "default"
+):
     """
-    Return vectorstore statistics.
+    Return vectorstore statistics for the given session.
     """
 
     try:
-        stats = _get_vectorstore().get_stats()
+        stats = _get_vectorstore().get_stats(session_id=session_id)
 
         logger.info(
-            "Vectorstore stats requested",
+            f"Vectorstore stats requested | session_id={session_id}",
             extra={"ai_pipeline": True},
         )
 
@@ -175,13 +195,15 @@ async def get_stats():
     "/reset",
     summary="Reset Vector Store",
 )
-async def reset_store():
+async def reset_store(
+    session_id: str = "default"
+):
     """
-    Clear all stored vectors/documents.
+    Clear all stored vectors/documents for the given session.
     """
 
     try:
-        success = _get_vectorstore().clear_collection()
+        success = _get_vectorstore().clear_collection(session_id=session_id)
 
         if not success:
             raise HTTPException(
@@ -190,13 +212,13 @@ async def reset_store():
             )
 
         logger.warning(
-            "Vectorstore reset performed",
+            f"Vectorstore reset performed | session_id={session_id}",
             extra={"ai_pipeline": True},
         )
 
         return {
             "success": True,
-            "message": "Vector store reset successfully.",
+            "message": f"Vector store reset successfully for session: {session_id}",
         }
 
     except HTTPException:

@@ -80,6 +80,7 @@ class RAGService:
         question: str,
         n_results: Optional[int] = None,
         chat_history: Optional[list] = None,
+        session_id: str = "default",
     ) -> RAGResponse:
 
         total_start = time.perf_counter()
@@ -96,6 +97,7 @@ class RAGService:
             query=question,
             n_results=n_results,
             chat_history=chat_history,
+            session_id=session_id,
         )
 
         if retrieval.total_chunks_in_store == 0:
